@@ -21,6 +21,7 @@ module sr_cpu
 );
     //control wires
     wire        aluZero;
+    wire        aluCmpResult;
     wire        pcSrc;
     wire        regWrite;
     wire        aluSrc;
@@ -94,6 +95,7 @@ module sr_cpu
         .srcB       ( srcB         ),
         .oper       ( aluControl   ),
         .zero       ( aluZero      ),
+        .cmpRes     ( aluCmpResult ),
         .result     ( aluResult    ) 
     );
 
@@ -105,6 +107,7 @@ module sr_cpu
         .cmdF3      ( cmdF3        ),
         .cmdF7      ( cmdF7        ),
         .aluZero    ( aluZero      ),
+        .aluCmpResult (aluCmpResult),
         .pcSrc      ( pcSrc        ),
         .regWrite   ( regWrite     ),
         .aluSrc     ( aluSrc       ),
@@ -163,6 +166,7 @@ module sr_control
     input     [ 2:0] cmdF3,
     input     [ 6:0] cmdF7,
     input            aluZero,
+    input            aluCmpResult,
     output           pcSrc, 
     output reg       regWrite, 
     output reg       aluSrc,
@@ -171,7 +175,8 @@ module sr_control
 );
     reg          branch;
     reg          condZero;
-    assign pcSrc = branch & (aluZero == condZero);
+    reg          cmp;
+    assign pcSrc = branch & (((aluZero == condZero) && (~cmp)) || (aluCmpResult && cmp));
 
     always @ (*) begin
         branch      = 1'b0;
@@ -191,8 +196,9 @@ module sr_control
             { `RVF7_ANY,  `RVF3_ADDI, `RVOP_ADDI } : begin regWrite = 1'b1; aluSrc = 1'b1; aluControl = `ALU_ADD; end
             { `RVF7_ANY,  `RVF3_ANY,  `RVOP_LUI  } : begin regWrite = 1'b1; wdSrc  = 1'b1; end
 
-            { `RVF7_ANY,  `RVF3_BEQ,  `RVOP_BEQ  } : begin branch = 1'b1; condZero = 1'b1; aluControl = `ALU_SUB; end
-            { `RVF7_ANY,  `RVF3_BNE,  `RVOP_BNE  } : begin branch = 1'b1; aluControl = `ALU_SUB; end
+            { `RVF7_ANY,  `RVF3_BEQ,  `RVOP_BEQ  } : begin branch = 1'b1; condZero = 1'b1; aluControl = `ALU_SUB; cmp = 0; end
+            { `RVF7_ANY,  `RVF3_BNE,  `RVOP_BNE  } : begin branch = 1'b1; aluControl = `ALU_SUB; cmp = 0; end
+            { `RVF7_ANY,  `RVF3_BLT,  `RVOP_BLT  } : begin branch = 1'b1; aluControl = `ALU_BLT; cmp = 1; end
         endcase
     end
 endmodule
@@ -203,16 +209,18 @@ module sr_alu
     input  [31:0] srcB,
     input  [ 2:0] oper,
     output        zero,
+    output reg    cmpRes,
     output reg [31:0] result
 );
     always @ (*) begin
         case (oper)
-            default   : result = srcA + srcB;
-            `ALU_ADD  : result = srcA + srcB;
-            `ALU_OR   : result = srcA | srcB;
-            `ALU_SRL  : result = srcA >> srcB [4:0];
-            `ALU_SLTU : result = (srcA < srcB) ? 1 : 0;
-            `ALU_SUB : result = srcA - srcB;
+            default   : begin result = srcA + srcB; cmpRes = 0; end
+            `ALU_ADD  : begin result = srcA + srcB; cmpRes = 0; end
+            `ALU_OR   : begin result = srcA | srcB; cmpRes = 0; end
+            `ALU_SRL  : begin result = srcA >> srcB [4:0]; cmpRes = 0; end
+            `ALU_SLTU : begin result = (srcA < srcB) ? 1 : 0; cmpRes = 0; end
+            `ALU_SUB : begin result = srcA - srcB; cmpRes = 0; end
+            `ALU_BLT : begin result = srcA - srcB; cmpRes = (srcA < srcB) ? 1 : 0; end
         endcase
     end
 
