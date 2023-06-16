@@ -23,6 +23,7 @@ module sr_cpu
     wire        aluZero;
     wire        aluCmpResult;
     wire        pcSrc;
+    wire        calcReady;
     wire        regWrite;
     wire        aluSrc;
     wire        wdSrc;
@@ -43,7 +44,7 @@ module sr_cpu
     wire [31:0] pc;
     wire [31:0] pcBranch = pc + immB;
     wire [31:0] pcPlus4  = pc + 4;
-    wire [31:0] pcNext   = pcSrc ? pcBranch : pcPlus4;
+    wire [31:0] pcNext   = calcReady ? (pcSrc ? pcBranch : pcPlus4) : pc;
     sm_register r_pc(clk ,rst_n, pcNext, pc);
 
     //program memory access
@@ -99,7 +100,11 @@ module sr_cpu
         .result     ( aluResult    ) 
     );
 
-    assign wd3 = wdSrc ? immU : aluResult;
+    wire funSrc;
+    wire [31:0] funResult;
+    assign funResult[31:25] = 0;
+
+    assign wd3 = wdSrc ? immU : (funSrc ? funResult : aluResult);
 
     //control
     sr_control sm_control (
@@ -111,9 +116,74 @@ module sr_cpu
         .pcSrc      ( pcSrc        ),
         .regWrite   ( regWrite     ),
         .aluSrc     ( aluSrc       ),
+        .funSrc     ( funSrc       ),
         .wdSrc      ( wdSrc        ),
         .aluControl ( aluControl   ) 
     );
+
+    sr_fun_control sr_fun_control (
+        .srcA(rd1[7:0]),
+        .srcB(srcB[7:0]),
+        .clk(clk),
+        .reset(rst_n),
+        .fun(funSrc),
+        .result(funResult[24:0]),
+        .ready(calcReady)
+    );
+
+endmodule
+
+module sr_fun_control
+(
+    input [7:0] srcA,
+    input [7:0] srcB,
+    input       clk,
+    input       reset,
+    input       fun,
+    output [24:0]result,
+    output reg  ready
+);
+
+    reg start;
+    wire busy;
+
+    reg state;
+    localparam IDLE = 1'b0;
+    localparam WORK = 1'b1;
+    assign ready = state ? ((busy || start) ? 0 : 1) : (fun ? 0 : 1);
+
+
+    func f(
+        .clk_i(clk),
+        .rst_i(~reset),
+        .a_bi(srcA),
+        .b_bi(srcB),
+        .start_i(start),
+        .busy_o(busy),
+        .y_bo(result)
+    );
+
+    always @ (posedge clk)
+        if (~reset)
+            state <= IDLE;
+        else begin
+            case (state)
+                IDLE: 
+                begin
+                    if (fun) begin
+                        state <= WORK;
+                        start <= 1;
+                    end
+                end
+                WORK:
+                begin
+                    if ((~busy) && (~start)) begin
+                        state <= IDLE;
+                    end
+                    start <= 0;
+                end
+            endcase
+        end
 
 endmodule
 
@@ -170,6 +240,7 @@ module sr_control
     output           pcSrc, 
     output reg       regWrite, 
     output reg       aluSrc,
+    output reg       funSrc,
     output reg       wdSrc,
     output reg [2:0] aluControl
 );
@@ -183,6 +254,7 @@ module sr_control
         condZero    = 1'b0;
         regWrite    = 1'b0;
         aluSrc      = 1'b0;
+        funSrc      = 1'b0;
         wdSrc       = 1'b0;
         aluControl  = `ALU_ADD;
 
@@ -199,6 +271,8 @@ module sr_control
             { `RVF7_ANY,  `RVF3_BEQ,  `RVOP_BEQ  } : begin branch = 1'b1; condZero = 1'b1; aluControl = `ALU_SUB; cmp = 0; end
             { `RVF7_ANY,  `RVF3_BNE,  `RVOP_BNE  } : begin branch = 1'b1; aluControl = `ALU_SUB; cmp = 0; end
             { `RVF7_ANY,  `RVF3_BLT,  `RVOP_BLT  } : begin branch = 1'b1; aluControl = `ALU_BLT; cmp = 1; end
+
+            { `RVF7_FUNCTION,  `RVF3_FUNCTION,  `RVOP_FUNCTION  } : begin regWrite = 1'b1; funSrc = 1;  end
         endcase
     end
 endmodule
